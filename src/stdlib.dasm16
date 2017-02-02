@@ -1,0 +1,256 @@
+;----------------------------------------------------------------
+:get_opt
+;----------------------------------------------------------------
+    SET PUSH, 0
+    SET A, DCDOS_ARGS_GET
+    INT DCDOS_IRQ_MAGIC
+    SET [filename], POP
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:file__load
+;----------------------------------------------------------------
+    ; fopen
+    set push, file
+    set push, [filename]
+    set push, 0
+    set a, DCDOS_SHELL_OPEN
+        int DCDOS_IRQ_MAGIC
+    set x, pop
+    add sp, 2
+
+    ifn x, 0
+        set pc, pop
+
+    jsr file__read
+
+    set pc, file__close
+
+;----------------------------------------------------------------
+:file__save
+;----------------------------------------------------------------
+    ; fopen
+    set push, file
+    set push, [filename]
+    set push, 1
+    set a, DCDOS_SHELL_OPEN
+        int DCDOS_IRQ_MAGIC
+    set x, pop
+    add sp, 2
+
+    ife x, 0
+        jsr file__write
+
+    set pc, file__close
+
+;----------------------------------------------------------------
+:file__close
+;----------------------------------------------------------------
+    set push, file
+    set a, DCDOS_FILE_FLUSH
+        int DCDOS_IRQ_MAGIC
+    add sp, 1
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:file__read
+;----------------------------------------------------------------
+    set push, file
+    set push, CLIPBOARD_RAM_START
+    set push, EDIT__BUF_SIZE
+    set a, DCDOS_FILE_READ
+        int DCDOS_IRQ_MAGIC
+    add sp, 1 ; error code
+    set y, pop ; words read
+    add sp, 1
+
+    set x, CLIPBOARD_RAM_START
+    add y, x
+
+:file__read__loop
+    ife x, y
+        set pc, pop
+
+    set c, [x]
+    jsr edit__insert_char
+
+    add x, 1
+    set pc, file__read__loop
+
+;----------------------------------------------------------------
+:file__write
+;----------------------------------------------------------------
+    set push, file
+    set a, DCDOS_FILE_TRUNCATE
+        int DCDOS_IRQ_MAGIC
+    set y, pop ; error code
+
+    set x, CLIPBOARD_RAM_START
+    add y, x
+
+    set j, CLIPBOARD_RAM_START
+    set i, BUFFER_RAM_START
+
+:file__write__copy_buffer
+    ife i, [edit__gap_start_ptr]
+        set i, [edit__gap_end_ptr]
+    ife i, BUFFER_RAM_END
+        set pc, file__write__save
+    sti [j], [i]
+    set pc, file__write__copy_buffer
+
+:file__write__save
+    set push, file
+    set push, CLIPBOARD_RAM_START
+    set push, j
+    sub [sp], CLIPBOARD_RAM_START
+    set a, DCDOS_FILE_WRITE
+        int DCDOS_IRQ_MAGIC
+    add sp, 3
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:screen__init
+; fastcall
+; clobbers a, b
+;----------------------------------------------------------------
+    set a, 0
+    set b, VIDEO_RAM_START
+    hwi [monitor]
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:screen__clear
+; fastcall
+; clobbers i, j
+;----------------------------------------------------------------
+    set [screen__cursor], 0
+    set i, VIDEO_RAM_START
+
+:screen__clear__loop
+    set [i], SCREEN_BLANK_CHAR
+    ifl i, VIDEO_RAM_END
+        sti pc, screen__clear__loop
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:buffers__clear
+; fastcall
+; clobbers i, j
+;----------------------------------------------------------------
+    set i, BUFFER_RAM_START
+
+:buffers__clear__loop
+    set [i], 0
+    ifl i, CLIPBOARD_RAM_END
+        sti pc, buffers__clear__loop
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:screen__toggle_cursor
+; fastcall
+; clobbers: x
+;----------------------------------------------------------------
+    set x, VIDEO_RAM_START
+    add x, [screen__cursor]
+    xor [x], 0xff80
+    set pc, pop
+
+;----------------------------------------------------------------
+:screen__move_cursor
+;  column [sp+2]
+;  row    [sp+1]
+;----------------------------------------------------------------
+    set [screen__cursor], [sp + 1]
+    mul [screen__cursor], SCREEN_COLS
+    add [screen__cursor], [sp + 2]
+
+    set [sp], pop    ; remove y
+    set [sp], pop    ; remove x
+    set pc, pop
+
+;----------------------------------------------------------------
+:getchar
+; return
+;   c: input character
+;----------------------------------------------------------------
+    ifn [clipboard__state], 0
+        set pc, getchar__from_clipboard
+
+:getchar__from_device
+    set a, 1                      ; store next key mode
+    hwi [keyboard]
+
+    ife c, 0
+        set pc, getchar__from_device
+
+    ife c, KEY_CTRL
+        set pc, getchar__from_device
+
+    ife c, KEY_SHIFT
+        set pc, getchar__from_device
+
+    set push, c
+
+    set a, 2
+    set b, KEY_CTRL
+    hwi [keyboard]
+    ifn c, 0
+        and [sp], KEY_CTRL_MASK
+    set c, pop
+
+    ifn c, KEY_CTRL_Y
+        set pc, pop
+
+:getchar__from_clipboard
+    ife [clipboard__state], 0
+        set [clipboard__state], CLIPBOARD_RAM_START
+
+    set x, [clipboard__state]
+
+    ifn [x], 0
+        set pc, getchar__from_clipboard__next
+
+:getchar__from_clipboard__break
+    set [clipboard__state], 0
+    set pc, getchar__from_device
+
+:getchar__from_clipboard__next
+    set c, [x]
+    add [clipboard__state], 1
+    set pc, pop
+
+;----------------------------------------------------------------
+:detect_hardware
+;----------------------------------------------------------------
+    hwn i
+:detect_hardware__loop
+    ife i, 0
+       set pc, pop
+    sub i, 1
+    hwq i
+    ife a, 0xf615
+        ife b, 0x7349
+            set [monitor], i
+    ife a, 0x7406
+        ife b, 0x30cf
+            set [keyboard], i
+    ife a, 0xb402
+        ife b, 0x12d1
+            set [timer], i
+    ife a, 0x24c5
+        ife b, 0x4fd5
+            set [floppy], i
+    ife a, 0x9088
+        ife b, 0xe023
+            set [hic], i
+    ife a, 0x90a5
+        ife b, 0xd005
+            set [rci], i
+    set pc, detect_hardware__loop

@@ -1,0 +1,621 @@
+;----------------------------------------------------------------
+:edit_main
+;----------------------------------------------------------------
+    jsr detect_hardware
+    ; mandatory hardware
+    ife [monitor], 0xffff
+        set pc, pop
+    ife [keyboard], 0xffff
+        set pc, pop
+
+    jsr get_opt
+
+    jsr screen__init
+    jsr screen__clear
+
+    jsr buffers__clear
+
+    ; initialize cursor to top left corner
+    ; these are screen coordinates (not column or line in text)
+    set [edit__scr_x], 0
+    set [edit__scr_y], 0
+
+    set [edit__view_start], 0
+    set [edit__view_shift], 0
+    set [edit__clipboard_cut], FALSE
+
+    ; set initial values for variables that are pointers to editing buffer
+    set [edit__gap_start_ptr], BUFFER_RAM_START
+    set [edit__line_ptr], BUFFER_RAM_START
+
+    set [edit__pos_ptr], BUFFER_RAM_END
+    set [edit__gap_end_ptr], BUFFER_RAM_END
+
+:edit__copy_arg_to_buffer
+    jsr file__load
+
+:edit__main_loop
+    jsr edit__view_focus
+
+    ifb [edit__scr_dirty], 2
+        jsr edit__draw_screen
+    ife [edit__scr_dirty], 1
+        jsr edit__draw_current_line
+
+    set push, [edit__scr_x]
+    set push, [edit__scr_y]
+    jsr screen__move_cursor
+
+    jsr screen__toggle_cursor
+    jsr getchar
+    jsr screen__toggle_cursor
+
+    ife c, KEY_CTRL_K
+        set pc, edit_key_ctrl_k
+    set [edit__clipboard_cut], FALSE
+    ife c, KEY_UP
+        set pc, edit_key_up
+    ife c, KEY_DOWN
+        set pc, edit_key_down
+    ife c, KEY_LEFT
+        set pc, edit_key_left
+    ife c, KEY_RIGHT
+        set pc, edit_key_right
+    ife c, KEY_DEL
+        set pc, edit_key_del
+    ife c, KEY_BS
+        set pc, edit_key_bs
+    ife c, KEY_NEWLINE
+        set pc, edit_key_newline
+    ife c, KEY_CTRL_X
+        set pc, edit__finish
+    ife c, KEY_CTRL_C
+        set pc, pop
+    ifg c, 0x19
+        ifl c, 0x7f
+            set pc, edit_key_character
+
+    set pc, edit__main_loop
+
+:edit__finish
+    jsr file__save
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit_key_up
+;----------------------------------------------------------------
+    set a, [edit__line_ptr]
+    jsr edit__prevline
+    set [edit__line_ptr], a
+
+    set b, [edit__scr_x]
+    add b, [edit__view_shift]
+    jsr edit__line_ptr_and_col_to_ptr
+    set [edit__pos_ptr], a
+
+    set pc, edit__main_loop
+
+;----------------------------------------------------------------
+:edit_key_down
+;----------------------------------------------------------------
+    set a, [edit__pos_ptr]
+    jsr edit__eol
+    ife a, BUFFER_RAM_END
+        set pc, edit__main_loop
+
+    set a, [edit__line_ptr]
+    jsr edit__nextline
+    set [edit__line_ptr], a
+
+    set b, [edit__scr_x]
+    add b, [edit__view_shift]
+    jsr edit__line_ptr_and_col_to_ptr
+    set [edit__pos_ptr], a
+
+    set pc, edit__main_loop
+
+;----------------------------------------------------------------
+:edit_key_left
+;----------------------------------------------------------------
+    set a, [edit__pos_ptr]
+
+    ife a, [edit__gap_end_ptr]
+        set a, [edit__gap_start_ptr]
+    ifg a, BUFFER_RAM_START
+        sub a, 1
+
+    ifn [a], KEY_NEWLINE
+        bor [edit__scr_dirty], 1
+
+    set [edit__pos_ptr], a
+    set pc, edit__main_loop
+;----------------------------------------------------------------
+:edit_key_right
+;----------------------------------------------------------------
+    set a, [edit__pos_ptr]
+
+    ifn [a], KEY_NEWLINE
+        bor [edit__scr_dirty], 1
+
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+    ifl a, BUFFER_RAM_END
+        add a, 1
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    set [edit__pos_ptr], a
+    set pc, edit__main_loop
+;----------------------------------------------------------------
+:edit_key_del
+;----------------------------------------------------------------
+    ifl [edit__pos_ptr], BUFFER_RAM_END
+        jsr edit__remove_char
+    set pc, edit__main_loop
+;----------------------------------------------------------------
+:edit_key_ctrl_k
+;----------------------------------------------------------------
+    set y, CLIPBOARD_RAM_START
+    ife [edit__clipboard_cut], FALSE
+        set pc, edit__key_ctrl_k__cut
+
+    set i, y
+:edit__key_ctrl_k__clip_end
+    ifn [i], 0
+        sti pc, edit__key_ctrl_k__clip_end
+    set y, i
+
+:edit__key_ctrl_k__cut
+    set x, 0
+    ifl [edit__pos_ptr], BUFFER_RAM_END
+        jsr edit__remove_char
+    ife x, 0
+        set pc, edit__key_ctrl_k__cut_end
+
+    set [y], x
+    add y, 1
+
+    ife x, KEY_NEWLINE
+        set pc, edit__key_ctrl_k__cut_end
+
+    set x, [edit__pos_ptr]
+    ife [x], KEY_NEWLINE
+        set pc, edit__key_ctrl_k__cut_end
+
+    set pc, edit__key_ctrl_k__cut
+
+:edit__key_ctrl_k__cut_end
+    set [y], 0
+
+    set [edit__clipboard_cut], TRUE
+    set pc, edit__main_loop
+
+;----------------------------------------------------------------
+:edit_key_bs
+;----------------------------------------------------------------
+    ifn [edit__pos_ptr], [edit__gap_end_ptr]
+        set pc, edit_key_bs_skip
+
+    ife [edit__gap_start_ptr], BUFFER_RAM_START
+        set pc, edit__main_loop
+
+    set [edit__pos_ptr], [edit__gap_start_ptr]
+
+:edit_key_bs_skip
+    ife [edit__pos_ptr], BUFFER_RAM_START
+        set pc, edit__main_loop
+    sub [edit__pos_ptr], 1
+    jsr edit__remove_char
+    set pc, edit__main_loop
+
+;----------------------------------------------------------------
+:edit_key_character
+;----------------------------------------------------------------
+    jsr edit__insert_char
+
+    set pc, edit__main_loop
+
+;----------------------------------------------------------------
+:edit_key_newline
+;----------------------------------------------------------------
+    jsr edit__insert_char
+
+    set b, [edit__line_ptr]
+    set c, ' '
+
+:edit_key_newline_loop
+    ifn [b], c
+        set pc, edit__main_loop
+
+    jsr edit__insert_char
+
+    add b, 1
+    set pc, edit_key_newline_loop
+
+;----------------------------------------------------------------
+:edit__draw_screen
+;----------------------------------------------------------------
+    set j, VIDEO_RAM_START
+
+    set i, [edit__view_start]
+    add i, BUFFER_RAM_START
+    ifl i, [edit__gap_start_ptr]
+        set pc, edit__draw_screen__loop
+    sub i, [edit__gap_start_ptr]
+    add i, [edit__gap_end_ptr]
+
+:edit__draw_screen__loop
+    jsr edit__draw_line
+
+    ifl j, VIDEO_RAM_END
+        set pc, edit__draw_screen__loop
+
+    set [edit__scr_dirty], 0
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__draw_current_line
+;----------------------------------------------------------------
+    set i, [edit__line_ptr]
+    set j, [edit__scr_y]
+    mul j, SCREEN_COLS
+    add j, VIDEO_RAM_START
+    jsr edit__draw_line
+
+    set [edit__scr_dirty], 0
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__draw_line
+; fastcall
+;   i: buffer pointer to beginning of line
+;   j: screen pointer to beginning of line
+; return
+;   i: pointer to beginning of next line in buffer or edit__buf_end_ptr
+;   j: pointer to beginning of next line in window of SCREEN_END
+;----------------------------------------------------------------
+    set c, 0
+:edit__draw_line__shift
+    ife i, [edit__gap_start_ptr]
+        set i, [edit__gap_end_ptr]
+    ife c, [edit__view_shift]
+        set pc, edit__draw_line__chars
+    ife i, BUFFER_RAM_END
+        set pc, edit__draw_line__chars
+    ife [i], KEY_NEWLINE
+        set pc, edit__draw_line__chars
+
+    add i, 1
+    add c, 1
+
+    set pc, edit__draw_line__shift
+
+:edit__draw_line__chars
+    set c, j
+    add c, SCREEN_COLS
+
+:edit__draw_line__chars__loop
+    set [j], SCREEN_BLANK_CHAR
+    ife i, BUFFER_RAM_END
+        set pc, edit__draw_line__chars__loop1
+    ife [i], KEY_NEWLINE
+        set pc, edit__draw_line__chars__loop1
+
+    set [j], [i]
+    bor [j], FONT_COLOR
+
+    add i, 1
+    ife i, [edit__gap_start_ptr]
+        set i, [edit__gap_end_ptr]
+
+:edit__draw_line__chars__loop1
+    add j, 1
+    ifl j, c
+        set pc, edit__draw_line__chars__loop
+
+    set c, edit_line_skip_end
+:edit_line_skip_end
+    ife i, BUFFER_RAM_END
+        set pc, pop
+    ife [i], KEY_NEWLINE
+        set c, pop
+
+    add i, 1
+    ife i, [edit__gap_start_ptr]
+        set i, [edit__gap_end_ptr]
+
+    set pc, c
+
+;----------------------------------------------------------------
+:edit__gap_move
+;----------------------------------------------------------------
+    set i, [edit__gap_start_ptr]
+    set j, [edit__gap_end_ptr]
+
+:edit__gap_move__loop
+    ifl j, [edit__pos_ptr]
+        sti [i], [j]
+    ifg i, [edit__pos_ptr]
+        std [j-1], [i-1]
+    ifn i, [edit__pos_ptr]
+        ifn j, [edit__pos_ptr]
+            set pc, edit__gap_move__loop
+
+    set [edit__gap_start_ptr], i
+    set [edit__gap_end_ptr], j
+
+    set [edit__pos_ptr], j
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__insert_char
+;----------------------------------------------------------------
+    ife [edit__gap_start_ptr], [edit__gap_end_ptr]
+        set pc, pop
+
+    jsr edit__gap_move
+
+    set a, [edit__gap_start_ptr]
+    set [a], c
+
+    bor [edit__scr_dirty], 1
+    ife c, KEY_NEWLINE
+        bor [edit__scr_dirty], 2
+
+    add [edit__gap_start_ptr], 1
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__remove_char
+;----------------------------------------------------------------
+    ife [edit__pos_ptr], BUFFER_RAM_END
+        set pc, pop
+    ife [edit__gap_start_ptr], BUFFER_RAM_START
+        ife [edit__gap_end_ptr], BUFFER_RAM_END
+            set pc, pop
+
+    jsr edit__gap_move
+
+    set x, [edit__pos_ptr]
+    set x, [x]
+
+    bor [edit__scr_dirty], 1
+    ife x, KEY_NEWLINE
+        bor [edit__scr_dirty], 2
+
+    add [edit__gap_end_ptr], 1
+    add [edit__pos_ptr], 1
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__bol
+; fastcall
+;     a: pos
+; return
+;   a: beginning of line pointer
+;----------------------------------------------------------------
+    ifn a, [edit__gap_end_ptr]
+        set pc, edit__bol_skip
+
+    ife [edit__gap_start_ptr], BUFFER_RAM_START
+        set pc, pop
+
+    set a, [edit__gap_start_ptr]
+
+:edit__bol_skip
+    ife a, BUFFER_RAM_START
+        set pc, pop
+
+    sub a, 1
+
+    ifn [a], KEY_NEWLINE
+        set pc, edit__bol
+
+    add a, 1
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__eol
+; fastcall
+;     a: pos
+; return
+;   a: pointer to next newline or edit__buf_end_ptr
+;----------------------------------------------------------------
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    ife a, BUFFER_RAM_END
+        set pc, pop
+
+    ife [a], KEY_NEWLINE
+        set pc, pop
+
+    add a, 1
+
+    set pc, edit__eol
+
+;----------------------------------------------------------------
+:edit__prevline
+; fastcall
+;     a: pos
+; return
+;   a: beginning of previous line
+;----------------------------------------------------------------
+    jsr edit__bol
+    ife a, BUFFER_RAM_START
+        set pc, pop
+
+    ife a, [edit__gap_end_ptr]
+        set a, [edit__gap_start_ptr]
+    sub a, 1
+
+    jsr edit__bol
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__nextline
+; fastcall
+;     a: pos
+; return
+;   a: beginning of next line
+;----------------------------------------------------------------
+    jsr edit__eol
+    ifl a, BUFFER_RAM_END
+        add a, 1
+
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    set pc, pop
+
+;----------------------------------------------------------------
+:edit__line_ptr_and_col_to_ptr
+; convert column to pointer
+; fastcall
+;   a: line beginning pointer
+;   b: column
+; return
+;   a: pointer to char in buf
+;----------------------------------------------------------------
+    ife b, 0
+        set pc, pop
+    ife a, BUFFER_RAM_END
+        set pc, pop
+    ife [a], KEY_NEWLINE
+        set pc, pop
+
+    sub b, 1
+    add a, 1
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    set pc, edit__line_ptr_and_col_to_ptr
+
+;----------------------------------------------------------------
+:edit__calc_col
+; fastcall
+;   a: line beginning pointer
+;   b: pointer to char in buf
+; return
+;   c: column
+;----------------------------------------------------------------
+    set c, 0
+
+    ife a, b
+        set pc, pop
+:edit__calc_col_loop
+    ife a, [edit__gap_start_ptr]
+        set a, [edit__gap_end_ptr]
+
+    ife a, b
+        set pc, pop
+
+    add c, 1
+    add a, 1
+
+    set pc, edit__calc_col_loop
+
+:edit__view_focus__only_line
+    set a, [edit__pos_ptr]
+    jsr edit__bol
+    set [edit__line_ptr], a
+    set pc, edit__view_focus__calc_scr_x__line_only
+
+:edit__view_focus
+    ife [edit__scr_dirty], 1
+        set pc, edit__view_focus__only_line
+
+    ; cur_line = bol (cur_pos);
+    set b, [edit__view_start]
+    add b, BUFFER_RAM_START
+    ifl b, [edit__gap_start_ptr]
+        set pc, edit__view_focus__start
+
+    sub b, [edit__gap_start_ptr]
+    add b, [edit__gap_end_ptr]
+
+:edit__view_focus__start
+    set a, [edit__pos_ptr]
+    jsr edit__bol
+    set [edit__line_ptr], a
+
+:edit__view_focus__up_to_cur_line
+    ife [edit__line_ptr], b
+        set pc, edit__view_focus__calc_scr_y
+    ifg [edit__line_ptr], b
+        set pc, edit__view_focus__calc_scr_y
+
+    set a, b
+    jsr edit__prevline
+    set b, a
+    bor [edit__scr_dirty], 2
+
+    set pc, edit__view_focus__up_to_cur_line
+
+:edit__view_focus__calc_scr_y
+    set [edit__scr_y], 0
+
+    set a, b                ; i = bow_line
+:edit__view_focus__calc_scr_y__loop
+    ife a, [edit__line_ptr]                ; i < cur_line
+        set pc, edit__view_focus__down_to_cur_line
+
+    jsr edit__nextline                    ; i = nextline(i)
+
+    add [edit__scr_y], 1                    ; cur_y++
+
+    set pc, edit__view_focus__calc_scr_y__loop
+
+:edit__view_focus__down_to_cur_line
+    set a, b
+
+:edit__view_focus__down_to_cur_line__loop
+    ifl [edit__scr_y], SCREEN_ROWS                ; cur_y >= LINES
+        set pc, edit__view_focus__calc_scr_x
+
+    jsr edit__nextline
+    bor [edit__scr_dirty], 2
+
+    sub [edit__scr_y], 1                    ; cur_y--
+    set pc, edit__view_focus__down_to_cur_line__loop
+
+:edit__view_focus__calc_scr_x
+    ifl a, [edit__gap_start_ptr]
+        set pc, edit__view_focus__calc_scr_x__skip
+    sub a, [edit__gap_end_ptr]
+    add a, [edit__gap_start_ptr]
+
+:edit__view_focus__calc_scr_x__skip
+    sub a, BUFFER_RAM_START
+    set [edit__view_start], a
+;---
+:edit__view_focus__calc_scr_x__line_only
+    set a, [edit__line_ptr]
+    set b, [edit__pos_ptr]
+    jsr edit__calc_col
+    sub c, [edit__view_shift]
+    set [edit__scr_x], c
+
+:edit__view_focus__left_to_cur_pos
+    ifc [edit__scr_x], 0x8000
+        set pc, edit__view_focus__right_to_cur_pos
+
+    add [edit__scr_x], 8
+    sub [edit__view_shift], 8
+    bor [edit__scr_dirty], 2
+
+    set pc, edit__view_focus__left_to_cur_pos
+
+:edit__view_focus__right_to_cur_pos
+    ifl [edit__scr_x], SCREEN_COLS
+        set pc, pop
+
+    sub [edit__scr_x], 8
+    add [edit__view_shift], 8
+    bor [edit__scr_dirty], 2
+
+    set pc, edit__view_focus__right_to_cur_pos

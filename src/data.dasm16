@@ -1,0 +1,44 @@
+;----------------------------------------------------------------
+; GLOBAL HW VARIABLES
+;----------------------------------------------------------------
+:keyboard               dat 0xffff
+:monitor                dat 0xffff
+:timer                  dat 0xffff
+:floppy                 dat 0xffff
+:hic                    dat 0xffff
+:rci                    dat 0xffff
+:imva                   dat 0xffff
+
+;----------------------------------------------------------------
+; GLOBAL EDITOR VARIABLES
+;----------------------------------------------------------------
+:edit__gap_start_ptr    dat 0
+:edit__gap_end_ptr      dat 0
+
+:edit__line_ptr         dat 0
+:edit__pos_ptr          dat 0
+
+:edit__view_start       dat 0
+:edit__view_shift       dat 0
+
+:edit__scr_x            dat 0
+:edit__scr_y            dat 0
+:edit__scr_dirty        dat 0
+:edit__clipboard_cut    dat FALSE
+
+;----------------------------------------------------------------
+; GLOBAL DISPLAY VARIABLES
+;----------------------------------------------------------------
+:screen__cursor         dat 0
+:clipboard__state       dat 0
+
+;----------------------------------------------------------------
+; FILE
+;----------------------------------------------------------------
+:filename               dat 0
+:file                   dat 0, 0, 0, 0, 0
+
+;----------------------------------------------------------------
+; BUFFERS
+;----------------------------------------------------------------
+:buffer_ram_start
