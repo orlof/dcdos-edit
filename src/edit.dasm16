@@ -2,6 +2,7 @@
 :edit_main
 ;----------------------------------------------------------------
     jsr detect_hardware
+
     ; mandatory hardware
     ife [monitor], 0xffff
         set pc, pop
