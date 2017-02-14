@@ -237,6 +237,11 @@
     hwq i
     ife a, 0xf615
         ife b, 0x734d
+            ; LEM
+            set [monitor], i
+    ife a, 0xf615
+        ife b, 0x774d
+            ; PIXIE
             set [monitor], i
     ife a, 0x7406
         ife b, 0x30C1
